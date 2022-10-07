@@ -24,20 +24,19 @@ const MAX_TASKS: usize = 50;
 pub struct Crawler;
 
 impl Crawler {
+    pub fn scrape(page: String) -> Vec<url::Url> {
+        let html = Html::parse_document(&page);
+        let selector = Selector::parse("a").unwrap();
+        html.select(&selector)
+            .filter_map(|element| element.value().attr("href"))
+            .filter_map(|href| url::Url::parse(href).ok())
+            .collect()
+    }
+
     pub async fn visit(url: impl AsRef<str>, tx: mpsc::Sender<String>) -> Result<()> {
         let body = reqwest::get(url.as_ref()).await?.text().await?;
-        let html = Html::parse_document(&body);
-        let selector = Selector::parse("a").unwrap();
-        let mut links = html.select(&selector);
-        //println!("  -> Parsing links of {:?}", url.as_ref());
-        while let Some(url) = links
-            .next()
-            .and_then(|a| a.value().attr("href"))
-            .map(url::Url::parse)
-        {
-            if let Ok(url) = url {
-                tx.send(url.into()).await.unwrap();
-            }
+        for url in Self::scrape(body) {
+            tx.send(url.into()).await.unwrap();
         }
         Ok(())
     }
@@ -45,20 +44,20 @@ impl Crawler {
     pub async fn run(root_url: String, n_tasks: Option<usize>) {
         let n_tasks = n_tasks.unwrap_or(MIN_TASKS).min(MAX_TASKS);
         let mut tasks = FuturesOrdered::new();
-        let (tx, rx) = mpsc::channel(2_usize.pow(16));
+        let (tx, rx) = mpsc::channel(n_tasks);
         let mut rx = ReceiverStream::new(rx).fuse();
-        tasks.push_back(tokio::task::spawn(async move { Self::visit(root_url, tx.clone()).await; }));
+        let sender = tx.clone();
+        tasks.push_back(tokio::task::spawn(Self::visit(root_url, sender)));
         let mut i = 1;
-        let mut j = n_tasks - 1;
         while i < MAX_PAGES {
             tokio::select!(
-                _ = tasks.next() => { j += 1; },
-                url = rx.next(), if j > 0 => {
+                _ = tasks.next() => {},
+                url = rx.next() => {
                     i += 1;
                     let url = url.unwrap();
                     println!("==> Visiting {}th url: {:?}", i, url);
-                    tasks.push_back(tokio::task::spawn(async move { Self::visit(url, tx.clone()).await; }));
-                    j -= 1;
+                    let sender = tx.clone();
+                    tasks.push_back(tokio::task::spawn(Self::visit(url, sender)));
                 },
                 else => break
             )
@@ -72,6 +71,6 @@ mod tests {
 
     #[tokio::test]
     async fn it_works() {
-        Crawler::run("http://www.spiegel.de".into(), Some(5)).await;
+        Crawler::run("http://www.spiegel.de".into(), Some(50)).await;
     }
 }
