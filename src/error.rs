@@ -3,6 +3,8 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum CrawlerError {
+    #[error("sync error {0}")]
+    UrlSend(#[from] tokio::sync::mpsc::error::SendError<url::Url>),
     #[error("url with no host")]
     NoUrlHost,
     #[error("url parse error {0}")]

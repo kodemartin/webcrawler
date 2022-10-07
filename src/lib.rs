@@ -12,8 +12,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use futures::stream::{FuturesOrdered, StreamExt};
-use sha1::{Sha1, Digest};
 use scraper::{Html, Selector};
+use sha1::{Digest, Sha1};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -21,7 +21,7 @@ use error::{CrawlerError, Result};
 
 pub mod error;
 
-const MAX_PAGES: usize = 10;
+const MAX_PAGES: usize = 100;
 const MIN_TASKS: usize = 5;
 const MAX_TASKS: usize = 50;
 
@@ -36,11 +36,8 @@ pub struct Storage {
 }
 
 impl Storage {
-
     pub fn new(path: PathBuf) -> Self {
-        Self {
-            path,
-        }
+        Self { path }
     }
 
     pub fn normalize_url(&self, url: url::Url) -> PathBuf {
@@ -64,10 +61,7 @@ impl Crawler {
         let root_url = url::Url::parse(&root_url)?;
         let host = root_url.host_str().ok_or(CrawlerError::NoUrlHost)?;
         let storage = Arc::new(Storage::new(format!("webpages/{}_{}", host, ts).into()));
-        Ok(Self {
-            root_url,
-            storage,
-        })
+        Ok(Self { root_url, storage })
     }
 
     pub fn scrape(page: String) -> Vec<url::Url> {
@@ -75,47 +69,59 @@ impl Crawler {
         let selector = Selector::parse("a").unwrap();
         html.select(&selector)
             .filter_map(|element| element.value().attr("href"))
+            .map(|href| {
+                tracing::info!("{:?}", href);
+                href
+            })
             .filter_map(|href| url::Url::parse(href).ok())
             .collect()
     }
 
-    pub async fn visit(url: url::Url, tx: mpsc::Sender<url::Url>, storage: Arc<Storage>) -> Result<()> {
-        println!("==> Visiting url: {:?}", url.as_str());
+    pub async fn visit(
+        url: url::Url,
+        tx: mpsc::Sender<url::Url>,
+        storage: Arc<Storage>,
+    ) -> Result<()> {
+        tracing::info!("==> Visiting url: {:?}", url.as_str());
         let body = reqwest::get(url.as_str()).await?.text().await?;
-        println!("  -> Serializing");
+        tracing::info!("  -> Serializing");
         storage.serialize(&body, url).await?;
-        println!("  -> Scraping");
+        tracing::info!("  -> Scraping");
         for url in Self::scrape(body) {
-            tx.send(url).await.unwrap();
+            tracing::info!("  -> url: {:?}", url.as_str());
+            tx.send(url).await?;
         }
         Ok(())
     }
 
     pub async fn run(self, n_tasks: Option<usize>) -> Result<()> {
+        // Setup storage dir
         tokio::fs::create_dir_all(&self.storage.path).await?;
-        let n_tasks = n_tasks.unwrap_or(MIN_TASKS).min(MAX_TASKS);
+        // Setup crawler sync
+        let mut n_tasks = n_tasks.unwrap_or(MIN_TASKS).min(MAX_TASKS);
         let mut tasks = FuturesOrdered::new();
         let (tx, rx) = mpsc::channel(2_usize.pow(16));
         let mut rx = ReceiverStream::new(rx).fuse();
+        // Start with root url
         let sender = tx.clone();
         let root_url = self.root_url.clone();
         let storage = Arc::clone(&self.storage);
-        tasks.push_back(Self::visit(root_url, sender, storage));
-        let mut i = 1;
-        let mut j = n_tasks - 1;
+        tasks.push_back(tokio::spawn(Self::visit(root_url, sender, storage)));
+        n_tasks -= 1;
+        // Descend into nested urls
+        let mut n_pages = 1;
         loop {
-            println!("{}-{}", i, j);
+            tracing::debug!("{}-{}", n_tasks, n_pages);
             tokio::select!(
-                Some(res) = tasks.next() => {
-                    println!("{:?}", res);
-                    j += 1;
+                Some(_) = tasks.next() => {
+                    n_tasks += 1;
                 },
-                url = rx.next(), if j > 0 && i < MAX_PAGES  => {
+                Some(url) = rx.next(), if n_tasks > 0 && n_pages < MAX_PAGES  => {
                     let sender = tx.clone();
                     let storage = Arc::clone(&self.storage);
-                    tasks.push_back(Self::visit(url.unwrap(), sender, storage));
-                    j -= 1;
-                    i += 1;
+                    tasks.push_back(tokio::spawn(Self::visit(url, sender, storage)));
+                    n_tasks -= 1;
+                    n_pages += 1;
                 },
                 else => break
             )
@@ -132,15 +138,8 @@ mod tests {
     async fn it_works() {
         Crawler::new("https://www.spiegel.de".into())
             .expect("valid root url")
-            .run(Some(50)).await;
-    }
-
-    #[test]
-    fn url() {
-        let a = "https://www.spiegel.de/spiegel/";
-        let b = "https://www.spiegel.de";
-        let a = url::Url::parse(a).unwrap();
-        let b = url::Url::parse(b).unwrap();
-        println!("{:?}", b.make_relative(&a).expect("").as_str());
+            .run(Some(50))
+            .await
+            .unwrap();
     }
 }
