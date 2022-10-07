@@ -47,9 +47,9 @@ impl Crawler {
         let mut tasks = FuturesOrdered::new();
         let (tx, rx) = mpsc::channel(2_usize.pow(16));
         let mut rx = ReceiverStream::new(rx).fuse();
-        tasks.push_back(Self::visit(root_url, tx.clone()));
+        tasks.push_back(tokio::task::spawn(async move { Self::visit(root_url, tx.clone()).await; }));
         let mut i = 1;
-        let mut j = n_tasks;
+        let mut j = n_tasks - 1;
         while i < MAX_PAGES {
             tokio::select!(
                 _ = tasks.next() => { j += 1; },
@@ -57,7 +57,7 @@ impl Crawler {
                     i += 1;
                     let url = url.unwrap();
                     println!("==> Visiting {}th url: {:?}", i, url);
-                    tasks.push_back(Self::visit(url, tx.clone()));
+                    tasks.push_back(tokio::task::spawn(async move { Self::visit(url, tx.clone()).await; }));
                     j -= 1;
                 },
                 else => break
