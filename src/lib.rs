@@ -21,10 +21,6 @@ use error::{CrawlerError, Result};
 
 pub mod error;
 
-const MAX_PAGES: usize = 100;
-const MIN_TASKS: usize = 5;
-const MAX_TASKS: usize = 50;
-
 pub struct Crawler {
     root_url: url::Url,
     storage: Arc<Storage>,
@@ -96,11 +92,10 @@ impl Crawler {
         Ok(())
     }
 
-    pub async fn run(self, n_tasks: Option<usize>) -> Result<()> {
+    pub async fn run(self, max_tasks: usize, max_pages: usize) -> Result<()> {
         // Setup storage dir
         tokio::fs::create_dir_all(&self.storage.path).await?;
         // Setup crawler sync
-        let n_tasks = n_tasks.unwrap_or(MIN_TASKS).min(MAX_TASKS);
         let mut tasks = FuturesOrdered::new();
         let (tx, rx) = mpsc::channel(2_usize.pow(16));
         let mut rx = ReceiverStream::new(rx).fuse();
