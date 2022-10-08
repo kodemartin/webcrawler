@@ -1,5 +1,5 @@
 use clap::Parser;
-use tracing::{info, Level};
+use tracing::info;
 use tracing_subscriber::FmtSubscriber;
 use webcrawler::Crawler;
 
@@ -9,7 +9,6 @@ const MAX_TASKS: usize = 50;
 
 fn use_tracing_subscriber() {
     let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::DEBUG)
         .finish();
 
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
@@ -34,6 +33,8 @@ struct CliArgs {
 #[tokio::main]
 async fn main() -> webcrawler::error::Result<()> {
     use_tracing_subscriber();
+	env_logger::init();
+
     let args = CliArgs::parse();
 
     let max_tasks = args.max_tasks.min(MAX_TASKS);

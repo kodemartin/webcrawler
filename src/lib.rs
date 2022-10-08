@@ -67,10 +67,6 @@ impl Crawler {
         let selector = Selector::parse("a").unwrap();
         html.select(&selector)
             .filter_map(|element| element.value().attr("href"))
-            .map(|href| {
-                tracing::info!("{:?}", href);
-                href
-            })
             .filter_map(|href| url::Url::parse(href).ok())
             .collect()
     }
@@ -124,19 +120,5 @@ impl Crawler {
             );
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn it_works() {
-        Crawler::new("https://www.spiegel.de".into())
-            .expect("valid root url")
-            .run(Some(50))
-            .await
-            .unwrap();
     }
 }
