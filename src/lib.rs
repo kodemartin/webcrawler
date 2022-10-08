@@ -35,6 +35,9 @@ pub struct Storage {
     path: PathBuf,
 }
 
+#[derive(Debug, Clone)]
+pub struct TaskContext((url::Url, mpsc::Sender<TaskContext>));
+
 impl Storage {
     pub fn new(path: PathBuf) -> Self {
         Self { path }
@@ -49,7 +52,6 @@ impl Storage {
 
     pub async fn serialize(&self, page: impl AsRef<[u8]>, url: url::Url) -> Result<()> {
         let path = self.path.join(self.normalize_url(url));
-        println!("  -> writing to {:?}", path);
         tokio::fs::write(path, page).await?;
         Ok(())
     }
@@ -79,7 +81,7 @@ impl Crawler {
 
     pub async fn visit(
         url: url::Url,
-        tx: mpsc::Sender<url::Url>,
+        tx: mpsc::Sender<TaskContext>,
         storage: Arc<Storage>,
     ) -> Result<()> {
         tracing::info!("==> Visiting url: {:?}", url.as_str());
@@ -88,8 +90,8 @@ impl Crawler {
         storage.serialize(&body, url).await?;
         tracing::info!("  -> Scraping");
         for url in Self::scrape(body) {
-            tracing::info!("  -> url: {:?}", url.as_str());
-            tx.send(url).await?;
+            let new_tx = tx.clone();
+            tx.send(TaskContext((url, new_tx))).await?;
         }
         Ok(())
     }
@@ -98,33 +100,33 @@ impl Crawler {
         // Setup storage dir
         tokio::fs::create_dir_all(&self.storage.path).await?;
         // Setup crawler sync
-        let mut n_tasks = n_tasks.unwrap_or(MIN_TASKS).min(MAX_TASKS);
+        let n_tasks = n_tasks.unwrap_or(MIN_TASKS).min(MAX_TASKS);
         let mut tasks = FuturesOrdered::new();
         let (tx, rx) = mpsc::channel(2_usize.pow(16));
         let mut rx = ReceiverStream::new(rx).fuse();
         // Start with root url
-        let sender = tx.clone();
         let root_url = self.root_url.clone();
         let storage = Arc::clone(&self.storage);
-        tasks.push_back(tokio::spawn(Self::visit(root_url, sender, storage)));
-        n_tasks -= 1;
+        tasks.push_back(tokio::spawn(Self::visit(root_url, tx, storage)));
         // Descend into nested urls
+        let mut n_tasks_remaining = max_tasks - 1;
         let mut n_pages = 1;
         loop {
-            tracing::debug!("{}-{}", n_tasks, n_pages);
             tokio::select!(
-                Some(_) = tasks.next() => {
-                    n_tasks += 1;
+                Some(result) = &mut tasks.next() => {
+                    match result {
+                        Ok(Ok(_)) => { n_tasks_remaining += 1 },
+                        err => { tracing::warn!("error visiting page: {:?}", err) }
+                    }
                 },
-                Some(url) = rx.next(), if n_tasks > 0 && n_pages < MAX_PAGES  => {
-                    let sender = tx.clone();
+                Some(TaskContext((url, tx))) = rx.next(), if n_tasks_remaining > 0 && n_pages < max_pages  => {
                     let storage = Arc::clone(&self.storage);
-                    tasks.push_back(tokio::spawn(Self::visit(url, sender, storage)));
-                    n_tasks -= 1;
+                    tasks.push_back(tokio::spawn(Self::visit(url, tx, storage)));
+                    n_tasks_remaining -= 1;
                     n_pages += 1;
                 },
                 else => break
-            )
+            );
         }
         Ok(())
     }
