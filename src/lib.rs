@@ -12,7 +12,7 @@ use std::sync::Arc;
 use futures::stream::{FuturesOrdered, StreamExt};
 use scraper::{Html, Selector};
 use sha1::{Digest, Sha1};
-use tokio::sync::mpsc;
+use tokio::{sync::mpsc, task::JoinHandle};
 use tokio_stream::wrappers::ReceiverStream;
 
 use error::{CrawlerError, Result};
@@ -25,6 +25,7 @@ pub struct Crawler {
     storage: Arc<Storage>,
     scraper: Arc<Scraper>,
     visited: HashSet<url::Url>,
+    task_queue: FuturesOrdered<JoinHandle<Result<()>>>,
 }
 
 /// The storage for persisting webpages
@@ -123,36 +124,41 @@ impl Crawler {
         };
         let visited = HashSet::default();
         let scraper = Arc::new(scraper.unwrap_or_default());
+        let task_queue = FuturesOrdered::new();
         Ok(Self {
             root_url,
             storage,
             scraper,
             visited,
+            task_queue,
         })
+    }
+
+    pub fn queue_task(&mut self, url: url::Url, tx: mpsc::Sender<TaskContext>) {
+        let storage = Arc::clone(&self.storage);
+        let scraper = Arc::clone(&self.scraper);
+        self.task_queue.push_back(tokio::spawn(async move {
+            scraper.visit(url, tx, storage).await
+        }));
     }
 
     pub async fn run(mut self, max_tasks: usize, max_pages: usize) -> Result<()> {
         // Setup storagedir
         self.storage.setup().await?;
         // Setup crawler sync
-        let mut tasks = FuturesOrdered::new();
         let (tx, rx) = mpsc::channel(2_usize.pow(16));
         let mut rx = ReceiverStream::new(rx).fuse();
         // Start with root url
-        let storage = Arc::clone(&self.storage);
-        let scraper = Arc::clone(&self.scraper);
         let root_url = self.root_url.clone();
-        tasks.push_back(tokio::spawn(async move {
-            scraper.visit(root_url, tx, storage).await
-        }));
-        self.visited.insert(self.root_url);
+        self.queue_task(root_url, tx);
+        self.visited.insert(self.root_url.clone());
         // Descend into nested urls
         let mut n_tasks_remaining = max_tasks - 1;
         let mut n_pages_qeued = 1;
         let mut n_pages_visited = 0;
         loop {
             tokio::select!(
-                Some(result) = &mut tasks.next() => {
+                Some(result) = &mut self.task_queue.next() => {
                     match result {
                         Ok(Ok(_)) => {
                             n_pages_visited += 1;
@@ -165,11 +171,7 @@ impl Crawler {
                 Some(TaskContext((url, tx))) = rx.next(), if n_tasks_remaining > 0 && n_pages_qeued < max_pages  => {
                     if !&self.visited.contains(&url) {
                         self.visited.insert(url.clone());
-                        let storage = Arc::clone(&self.storage);
-                        let scraper = Arc::clone(&self.scraper);
-                        tasks.push_back(tokio::spawn(async move {
-                            scraper.visit(url, tx, storage).await
-                        }));
+                        self.queue_task(url, tx);
                         n_tasks_remaining -= 1;
                         n_pages_qeued += 1;
                     }
