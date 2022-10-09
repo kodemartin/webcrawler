@@ -14,14 +14,16 @@ fn use_tracing_subscriber() {
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 }
 
-/// Simple program to greet a person
+/// A command-line application that launches a crawler
+/// starting from a root url, and descending to nested
+/// urls in a breadth-first manner.
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct CliArgs {
     /// The root url to start the crawling from
     root_url: String,
 
-    /// Max number of tasks to trigger
+    /// Max number of concurrent tasks to trigger
     #[arg(long, default_value_t = MIN_TASKS)]
     max_tasks: usize,
 
