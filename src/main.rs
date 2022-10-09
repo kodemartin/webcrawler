@@ -1,11 +1,17 @@
 use clap::Parser;
 use tracing::info;
 use tracing_subscriber::FmtSubscriber;
-use webcrawler::Crawler;
+use webcrawler::{Crawler, Scraper};
 
 const MAX_PAGES: usize = 100;
 const MIN_TASKS: usize = 5;
 const MAX_TASKS: usize = 50;
+
+static APP_USER_AGENT: &str = concat!(
+	env!("CARGO_PKG_NAME"),
+	"_",
+	env!("CARGO_PKG_VERSION"),
+);
 
 fn use_tracing_subscriber() {
     let subscriber = FmtSubscriber::builder().finish();
@@ -41,8 +47,12 @@ async fn main() -> webcrawler::error::Result<()> {
     let max_tasks = args.max_tasks.min(MAX_TASKS);
     let max_pages = args.max_pages.min(MAX_PAGES);
 
+	let client = reqwest::Client::builder()
+		.user_agent(APP_USER_AGENT)
+		.build()?;
+
     info!("==> Starting crawler...");
-    Crawler::new(args.root_url, None, None)?
+    Crawler::new(args.root_url, None, Some(Scraper::new(client)))?
         .run(max_tasks, max_pages)
         .await
 }
