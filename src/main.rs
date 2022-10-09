@@ -8,8 +8,7 @@ const MIN_TASKS: usize = 5;
 const MAX_TASKS: usize = 50;
 
 fn use_tracing_subscriber() {
-    let subscriber = FmtSubscriber::builder()
-        .finish();
+    let subscriber = FmtSubscriber::builder().finish();
 
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 }
@@ -35,7 +34,7 @@ struct CliArgs {
 #[tokio::main]
 async fn main() -> webcrawler::error::Result<()> {
     use_tracing_subscriber();
-	env_logger::init();
+    env_logger::init();
 
     let args = CliArgs::parse();
 
@@ -43,7 +42,7 @@ async fn main() -> webcrawler::error::Result<()> {
     let max_pages = args.max_pages.min(MAX_PAGES);
 
     info!("==> Starting crawler...");
-    Crawler::new(args.root_url, None)?
+    Crawler::new(args.root_url, None, None)?
         .run(max_tasks, max_pages)
         .await
 }

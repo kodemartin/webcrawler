@@ -23,6 +23,7 @@ pub mod error;
 pub struct Crawler {
     root_url: url::Url,
     storage: Arc<Storage>,
+    scraper: Arc<Scraper>,
     visited: HashSet<url::Url>,
 }
 
@@ -30,6 +31,13 @@ pub struct Crawler {
 #[derive(Debug)]
 pub struct Storage {
     path: PathBuf,
+}
+
+/// Encapsulates functionality to get the webpage
+/// and scrape the desired information
+#[derive(Default, Clone)]
+pub struct Scraper {
+    pub client: reqwest::Client,
 }
 
 /// Context for spawing a crawl task
@@ -69,19 +77,9 @@ impl TryFrom<&url::Url> for Storage {
     }
 }
 
-impl Crawler {
-    pub fn new(root_url: String, storage: Option<Storage>) -> Result<Self> {
-        let root_url = url::Url::parse(&root_url)?;
-        let storage = match storage {
-            Some(storage) => Arc::new(storage),
-            None => Arc::new(Storage::try_from(&root_url)?),
-        };
-        let visited = HashSet::default();
-        Ok(Self {
-            root_url,
-            storage,
-            visited,
-        })
+impl Scraper {
+    pub fn new(client: reqwest::Client) -> Self {
+        Self { client }
     }
 
     pub fn scrape(page: String) -> Vec<url::Url> {
@@ -94,12 +92,13 @@ impl Crawler {
     }
 
     pub async fn visit(
+        &self,
         url: url::Url,
         tx: mpsc::Sender<TaskContext>,
         storage: Arc<Storage>,
     ) -> Result<()> {
         tracing::debug!("==> Visiting url: {:?}", url.as_str());
-        let body = reqwest::get(url.as_str()).await?.text().await?;
+        let body = self.client.get(url.as_str()).send().await?.text().await?;
         tracing::debug!("  -> Serializing");
         storage.serialize(&body, &url).await?;
         tracing::debug!("  -> Scraping");
@@ -108,6 +107,28 @@ impl Crawler {
             tx.send(TaskContext((url, new_tx))).await?;
         }
         Ok(())
+    }
+}
+
+impl Crawler {
+    pub fn new(
+        root_url: String,
+        storage: Option<Storage>,
+        scraper: Option<Scraper>,
+    ) -> Result<Self> {
+        let root_url = url::Url::parse(&root_url)?;
+        let storage = match storage {
+            Some(storage) => Arc::new(storage),
+            None => Arc::new(Storage::try_from(&root_url)?),
+        };
+        let visited = HashSet::default();
+        let scraper = Arc::new(scraper.unwrap_or_default());
+        Ok(Self {
+            root_url,
+            storage,
+            scraper,
+            visited,
+        })
     }
 
     pub async fn run(mut self, max_tasks: usize, max_pages: usize) -> Result<()> {
@@ -119,11 +140,11 @@ impl Crawler {
         let mut rx = ReceiverStream::new(rx).fuse();
         // Start with root url
         let storage = Arc::clone(&self.storage);
-        tasks.push_back(tokio::spawn(Self::visit(
-            self.root_url.clone(),
-            tx,
-            storage,
-        )));
+        let scraper = Arc::clone(&self.scraper);
+        let root_url = self.root_url.clone();
+        tasks.push_back(tokio::spawn(async move {
+            scraper.visit(root_url, tx, storage).await
+        }));
         self.visited.insert(self.root_url);
         // Descend into nested urls
         let mut n_tasks_remaining = max_tasks - 1;
@@ -145,7 +166,10 @@ impl Crawler {
                     if !&self.visited.contains(&url) {
                         self.visited.insert(url.clone());
                         let storage = Arc::clone(&self.storage);
-                        tasks.push_back(tokio::spawn(Self::visit(url, tx, storage)));
+                        let scraper = Arc::clone(&self.scraper);
+                        tasks.push_back(tokio::spawn(async move {
+                            scraper.visit(url, tx, storage).await
+                        }));
                         n_tasks_remaining -= 1;
                         n_pages_qeued += 1;
                     }
