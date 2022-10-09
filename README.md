@@ -30,3 +30,8 @@ Options:
   -h, --help                   Print help information
   -V, --version                Print version information
 ```
+
+## Limitations
+
+* Links with relative urls are not treated
+* `robots.txt` is not handled
