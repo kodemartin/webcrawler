@@ -41,5 +41,7 @@ async fn main() -> webcrawler::error::Result<()> {
     let max_pages = args.max_pages.min(MAX_PAGES);
 
     info!("==> Starting crawler...");
-    Crawler::new(args.root_url)?.run(max_tasks, max_pages).await
+    Crawler::new(args.root_url, None)?
+        .run(max_tasks, max_pages)
+        .await
 }
