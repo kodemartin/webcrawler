@@ -28,89 +28,6 @@ pub struct Crawler {
     task_queue: FuturesOrdered<JoinHandle<Result<()>>>,
 }
 
-/// The storage for persisting webpages
-#[derive(Debug)]
-pub struct Storage {
-    path: PathBuf,
-}
-
-/// Encapsulates functionality to get the webpage
-/// and scrape the desired information
-#[derive(Default, Clone)]
-pub struct Scraper {
-    pub client: reqwest::Client,
-}
-
-/// Context for spawning a crawl task
-#[derive(Debug, Clone)]
-pub struct TaskContext((url::Url, mpsc::Sender<TaskContext>));
-
-impl Storage {
-    pub fn new(path: PathBuf) -> Self {
-        Self { path }
-    }
-
-    pub async fn setup(&self) -> Result<()> {
-        Ok(tokio::fs::create_dir_all(&self.path).await?)
-    }
-
-    pub fn url_to_path(&self, url: &url::Url) -> PathBuf {
-        let hash = Sha1::digest(url.as_str().as_bytes());
-        let mut path = PathBuf::from(hex::encode(hash.as_slice()));
-        path.set_extension("html");
-        path
-    }
-
-    pub async fn serialize(&self, page: impl AsRef<[u8]>, url: &url::Url) -> Result<()> {
-        let path = self.path.join(self.url_to_path(url));
-        tokio::fs::write(path, page).await?;
-        Ok(())
-    }
-}
-
-impl TryFrom<&url::Url> for Storage {
-    type Error = CrawlerError;
-
-    fn try_from(url: &url::Url) -> Result<Self> {
-        let ts = chrono::Utc::now().timestamp_millis();
-        let host = url.host_str().ok_or(CrawlerError::NoUrlHost)?;
-        Ok(Storage::new(format!("webpages/{}_{}", host, ts).into()))
-    }
-}
-
-impl Scraper {
-    pub fn new(client: reqwest::Client) -> Self {
-        Self { client }
-    }
-
-    pub fn scrape(page: String) -> Vec<url::Url> {
-        let html = Html::parse_document(&page);
-        let selector = Selector::parse("a").unwrap();
-        html.select(&selector)
-            .filter_map(|element| element.value().attr("href"))
-            .filter_map(|href| url::Url::parse(href).ok())
-            .collect()
-    }
-
-    pub async fn visit(
-        &self,
-        url: url::Url,
-        tx: mpsc::Sender<TaskContext>,
-        storage: Arc<Storage>,
-    ) -> Result<()> {
-        tracing::debug!("==> Visiting url: {:?}", url.as_str());
-        let body = self.client.get(url.as_str()).send().await?.text().await?;
-        tracing::debug!("  -> Serializing");
-        storage.serialize(&body, &url).await?;
-        tracing::debug!("  -> Scraping");
-        for url in Self::scrape(body) {
-            let new_tx = tx.clone();
-            tx.send(TaskContext((url, new_tx))).await?;
-        }
-        Ok(())
-    }
-}
-
 impl Crawler {
     pub fn new(
         root_url: String,
@@ -178,6 +95,89 @@ impl Crawler {
                 },
                 else => break
             );
+        }
+        Ok(())
+    }
+}
+
+/// Context for spawning a crawl task
+#[derive(Debug, Clone)]
+pub struct TaskContext((url::Url, mpsc::Sender<TaskContext>));
+
+/// The storage for persisting webpages
+#[derive(Debug)]
+pub struct Storage {
+    path: PathBuf,
+}
+
+impl Storage {
+    pub fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    pub async fn setup(&self) -> Result<()> {
+        Ok(tokio::fs::create_dir_all(&self.path).await?)
+    }
+
+    pub fn url_to_path(&self, url: &url::Url) -> PathBuf {
+        let hash = Sha1::digest(url.as_str().as_bytes());
+        let mut path = PathBuf::from(hex::encode(hash.as_slice()));
+        path.set_extension("html");
+        path
+    }
+
+    pub async fn serialize(&self, page: impl AsRef<[u8]>, url: &url::Url) -> Result<()> {
+        let path = self.path.join(self.url_to_path(url));
+        tokio::fs::write(path, page).await?;
+        Ok(())
+    }
+}
+
+impl TryFrom<&url::Url> for Storage {
+    type Error = CrawlerError;
+
+    fn try_from(url: &url::Url) -> Result<Self> {
+        let ts = chrono::Utc::now().timestamp_millis();
+        let host = url.host_str().ok_or(CrawlerError::NoUrlHost)?;
+        Ok(Storage::new(format!("webpages/{}_{}", host, ts).into()))
+    }
+}
+
+/// Encapsulates functionality to get the webpage
+/// and scrape the desired information
+#[derive(Default, Clone)]
+pub struct Scraper {
+    pub client: reqwest::Client,
+}
+
+impl Scraper {
+    pub fn new(client: reqwest::Client) -> Self {
+        Self { client }
+    }
+
+    pub fn scrape(page: String) -> Vec<url::Url> {
+        let html = Html::parse_document(&page);
+        let selector = Selector::parse("a").unwrap();
+        html.select(&selector)
+            .filter_map(|element| element.value().attr("href"))
+            .filter_map(|href| url::Url::parse(href).ok())
+            .collect()
+    }
+
+    pub async fn visit(
+        &self,
+        url: url::Url,
+        tx: mpsc::Sender<TaskContext>,
+        storage: Arc<Storage>,
+    ) -> Result<()> {
+        tracing::debug!("==> Visiting url: {:?}", url.as_str());
+        let body = self.client.get(url.as_str()).send().await?.text().await?;
+        tracing::debug!("  -> Serializing");
+        storage.serialize(&body, &url).await?;
+        tracing::debug!("  -> Scraping");
+        for url in Self::scrape(body) {
+            let new_tx = tx.clone();
+            tx.send(TaskContext((url, new_tx))).await?;
         }
         Ok(())
     }
