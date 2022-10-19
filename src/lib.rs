@@ -71,7 +71,7 @@ impl Crawler {
         self.visited.insert(self.root_url.clone());
         // Descend into nested urls
         let mut n_tasks_remaining = max_tasks - 1;
-        let mut n_pages_qeued = 1;
+        let mut n_pages_queued = 1;
         let mut n_pages_visited = 0;
         loop {
             tokio::select!(
@@ -82,15 +82,18 @@ impl Crawler {
                             n_tasks_remaining += 1;
                             tracing::info!("==> Visited {} out of {}", n_pages_visited, max_pages);
                         },
-                        err => { tracing::warn!("error visiting page: {:?}", err) }
+                        err => {
+                            n_pages_queued -= 1;
+                            tracing::warn!("error visiting page: {:?}", err);
+                        }
                     }
                 },
-                Some(TaskContext((url, tx))) = rx.next(), if n_tasks_remaining > 0 && n_pages_qeued < max_pages  => {
+                Some(TaskContext((url, tx))) = rx.next(), if n_tasks_remaining > 0 && n_pages_queued < max_pages  => {
                     if !&self.visited.contains(&url) {
                         self.visited.insert(url.clone());
                         self.queue_task(url, tx);
                         n_tasks_remaining -= 1;
-                        n_pages_qeued += 1;
+                        n_pages_queued += 1;
                     }
                 },
                 else => break
