@@ -23,7 +23,7 @@ pub mod error;
 pub struct Crawler {
     root_url: url::Url,
     storage: Arc<Storage>,
-    scraper: Arc<Scraper>,
+    scraper: Scraper,
     visited: HashSet<url::Url>,
     task_queue: FuturesOrdered<JoinHandle<Result<()>>>,
 }
@@ -41,7 +41,7 @@ pub struct Scraper {
     pub client: reqwest::Client,
 }
 
-/// Context for spawing a crawl task
+/// Context for spawning a crawl task
 #[derive(Debug, Clone)]
 pub struct TaskContext((url::Url, mpsc::Sender<TaskContext>));
 
@@ -123,7 +123,7 @@ impl Crawler {
             None => Arc::new(Storage::try_from(&root_url)?),
         };
         let visited = HashSet::default();
-        let scraper = Arc::new(scraper.unwrap_or_default());
+        let scraper = scraper.unwrap_or_default();
         let task_queue = FuturesOrdered::new();
         Ok(Self {
             root_url,
@@ -136,7 +136,7 @@ impl Crawler {
 
     pub fn queue_task(&mut self, url: url::Url, tx: mpsc::Sender<TaskContext>) {
         let storage = Arc::clone(&self.storage);
-        let scraper = Arc::clone(&self.scraper);
+        let scraper = self.scraper.clone();
         self.task_queue.push_back(tokio::spawn(async move {
             scraper.visit(url, tx, storage).await
         }));
