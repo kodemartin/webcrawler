@@ -6,7 +6,8 @@ A library for enabling breadth-first crawling starting from a root URL.
 
 * Dynamically set maximum concurrent tasks
 * Dynamically set maximum number of pages to visit
-* Skipping duplicate pages
+* Skips duplicate pages
+* Stores visited pages in the `webpages` directory.
 
 ## Command-line application
 
@@ -25,8 +26,11 @@ Arguments:
   <ROOT_URL>  The root url to start the crawling from
 
 Options:
-      --max-tasks <MAX_TASKS>  Max number of concurrent tasks to trigger [default: 5]
+      --max-tasks <MAX_TASKS>  Max number of concurrent tasks to trigger
+[default: 5]
       --max-pages <MAX_PAGES>  Max number of pages to visit [default: 100]
+      --n-workers <N_WORKERS>  Number of workers. By default this equals the
+number of available cores
   -h, --help                   Print help information
   -V, --version                Print version information
 ```

@@ -5,7 +5,6 @@ use webcrawler::{Crawler, Scraper};
 
 const MAX_PAGES: usize = 100;
 const MIN_TASKS: usize = 5;
-const MAX_TASKS: usize = 50;
 
 static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "_", env!("CARGO_PKG_VERSION"),);
 
@@ -29,26 +28,40 @@ struct CliArgs {
     max_tasks: usize,
 
     /// Max number of pages to visit
-    #[arg(long, default_value_t = 100)]
+    #[arg(long, default_value_t = MAX_PAGES)]
     max_pages: usize,
+
+    /// Number of workers. By default this equals
+    /// the number of available cores.
+    #[arg(long)]
+    n_workers: Option<usize>,
 }
 
-#[tokio::main]
-async fn main() -> webcrawler::error::Result<()> {
+fn main() -> webcrawler::error::Result<()> {
     use_tracing_subscriber();
     env_logger::init();
 
     let args = CliArgs::parse();
 
-    let max_tasks = args.max_tasks.min(MAX_TASKS);
-    let max_pages = args.max_pages.min(MAX_PAGES);
+    let max_tasks = args.max_tasks;
+    let max_pages = args.max_pages;
 
     let client = reqwest::Client::builder()
         .user_agent(APP_USER_AGENT)
         .build()?;
 
-    info!("==> Starting crawler...");
-    Crawler::new(args.root_url, None, Some(Scraper::new(client)))?
-        .run(max_tasks, max_pages)
-        .await
+    let mut rt_builder = tokio::runtime::Builder::new_multi_thread();
+    if let Some(n_workers) = args.n_workers {
+        rt_builder.worker_threads(n_workers);
+    }
+    rt_builder
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async move {
+            info!("==> Starting crawler...");
+            Crawler::new(args.root_url, None, Some(Scraper::new(client)))?
+                .run(max_tasks, max_pages)
+                .await
+        })
 }
