@@ -1,10 +1,9 @@
 //! Implementation of a web-crawler library.
 //!
-//! The crawler takes as input a webpage URL, a maximum number of concurrent
-//! tasks to spawn, and a maximum number of pages to visit.
+//! The crawler takes as input a root webpage URL and
+//! traverses the contained links in a breadth-first manner.
 //!
-//! It then traverses the contained links in a breadth-first manner
-//! and saves each page into a folder.
+//! Each visited page is stored in the disk.
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -19,7 +18,6 @@ use error::{CrawlerError, Result};
 
 pub mod error;
 
-/// Represent the crawler
 pub struct Crawler {
     root_url: url::Url,
     storage: Arc<Storage>,
